@@ -1,0 +1,569 @@
+<!-- -------------------------------
+
+Note:
+
+When I wrote this code, only I and God
+knew what it was
+Now only God knows!
+
+So if you are trying to 'optimize'
+this routine (and failed)
+Please increement the following counter
+as a warning
+to the next guy
+
+-------------------------------- -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Game</title>
+</head>
+<body>
+    <script>
+
+void (function () {
+    const canvas = document.createElement("canvas");
+    const c = canvas.getContext("2d");
+    const mouse = { x: undefined, y: undefined };
+    const click = { x: undefined, y: undefined };
+    const keyCode = [];
+    const tankArray = [];
+    let state = "start";
+    onResize();
+    function Rect(x, y, width, height, color, rotate, velocity) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.color = color;
+        this.rotate = rotate || { type: "center", angle: Math.PI/2 };
+        this.velocity = velocity || { x: 0, y: 0, rotate: 0 };
+        this.x1 = this.x;
+        this.y1 = this.y - this.height * 0.5;
+        this.x2 = this.x;
+        this.y2 = this.y + this.height * 0.5;
+    }
+    Rect.prototype = {
+        draw: function () {
+            this.x1 = this.x;
+            this.y1 = this.y - this.height * 0.5;
+            this.x2 = this.x;
+            this.y2 = this.y + this.height * 0.5;
+            if (typeof this.rotate === "object") {
+                if (this.rotate.type === "top2bottom") {
+                    const point = pointOnCircle(this.x2, this.y2, this.height, this.rotate.angle);
+                    this.x1 = point.x;
+                    this.y1 = point.y;
+                } else if (this.rotate.type === "center") {
+                    const point1 = pointOnCircle(this.x, this.y, this.height * 0.5, this.rotate.angle);
+                    const point2 = pointOnCircle(this.x, this.y, this.height * 0.5, this.rotate.angle - Math.PI);
+                    this.x1 = point1.x;
+                    this.y1 = point1.y;
+                    this.x2 = point2.x;
+                    this.y2 = point2.y;
+                }
+            }
+            c.beginPath();
+            c.moveTo(this.x1, this.y1);
+            c.lineTo(this.x2, this.y2);
+            c.lineWidth = this.width;
+            c.strokeStyle = this.color;
+            c.stroke();
+            c.closePath();
+        },
+        collisionToPoint: function (x, y) {
+            if (
+                x >= this.x - this.width * 0.5 &&
+                y >= this.y - this.height * 0.5 &&
+                x <= this.x + this.width * 0.5 &&
+                y <= this.y + this.height * 0.5
+            )
+                return true;
+            else return false;
+        }
+    };
+    function Circle(x, y, radius, color, velocity, angles, circularRadii) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+        this.color = color;
+        this.angles = angles || { x: Math.PI, y: Math.PI };
+        this.circularRadii = circularRadii || { x: 0, y: 0 };
+        this.frameCount = 0;
+        this.velocity = velocity || {
+            x: 0,
+            y: 0,
+            angleX: 0,
+            angleY: 0,
+            circularRadii: { x: 0, y: 0 }
+        };
+        this.definedCircularPoint = { x: x, y: y };
+    }
+    Circle.prototype = {
+        draw: function () {
+            c.beginPath();
+            c.arc(this.x, this.y, this.radius, 0, 2 * 3.14159, false);
+            c.fillStyle = this.color;
+            c.fill();
+            c.closePath();
+            this.frameCount += 1;
+        },
+        update: function () {
+            this.x += this.velocity.x;
+            this.y += this.velocity.y;
+            this.draw();
+        },
+        makeCircle: function () {
+            this.x = this.definedCircularPoint.x + Math.cos(-this.angles.x) * this.circularRadii.x;
+            this.y = this.definedCircularPoint.y + Math.sin(-this.angles.y) * this.circularRadii.y;
+            this.angles.x += this.velocity.angleX;
+            this.angles.y += this.velocity.angleY;
+            this.circularRadii.x += this.velocity.circularRadii.x;
+            this.circularRadii.y += this.velocity.circularRadii.y;
+            this.draw();
+        }
+    };
+    const Tank = function (x, y, width, height, colors, projectileCount, health, id) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.colors = colors || { turret: "#8B0000", body: "red" };
+        this.rotateAngle = Math.PI/2;
+        this.body = new Rect(this.x, this.y, this.width, this.height, this.colors.body, { type: "center", angle: Math.PI/2 });
+        this.canShoot = true;
+        this.projectiles = [];
+        this.projectileExplosions = [];
+        this.projectileCount = projectileCount || Infinity;
+        this.health = health || 1;
+        this.id = id || new String();
+        this.score = 0;
+        this.turret = {
+            body: new Circle(this.x, this.y, this.width/2 - 5, this.colors.turret),
+            le: new Rect(this.x, this.y - this.height * 0.5, 5, 100, "grey", { type: "top2bottom", angle: Math.PI/2 })
+        };
+        this.explosionParticlesOnFire = [];
+        this.shootInterval;
+        tankArray.push(this);
+    }
+    Tank.prototype = {
+        moveRight: function () {
+            this.body.rotate.angle -= 0.015;
+        },
+        moveLeft: function () {
+            this.body.rotate.angle += 0.015;
+        },
+        moveAhead: function () {
+            this.y -= Math.sin(this.body.rotate.angle) * 1;
+            this.x += Math.cos(this.body.rotate.angle) * 1;
+        },
+        moveBackward: function () {
+            this.y += Math.sin(this.body.rotate.angle) * 1;
+            this.x -= Math.cos(this.body.rotate.angle) * 1;
+        },
+        render: function () {
+            this.body.x = this.x;
+            this.body.y = this.y;
+            this.turret.le.x = this.x;
+            this.turret.le.y = (this.y - this.height * 0.5);
+            this.turret.body.x = this.x;
+            this.turret.body.y = this.y;
+            this.turret.le.rotate.angle = this.rotateAngle;
+            this.body.draw();
+            this.turret.le.draw();
+            this.turret.body.draw();
+            if (this.rotateAngle < -Math.PI) {
+                this.rotateAngle = Math.PI;
+            } else if (this.rotateAngle > Math.PI) {
+                this.rotateAngle = -Math.PI;
+            }
+            if (this.projectileCount <= 0) this.canShoot = false;
+            for (let index = 0; index < this.projectiles.length; index++) {
+                const eachProjectile = this.projectiles[index];
+                eachProjectile.update();
+                if (
+                    eachProjectile.x - eachProjectile.radius * 2 > canvas.width ||
+                    eachProjectile.x + eachProjectile.radius * 2 < 0 ||
+                    eachProjectile.y - eachProjectile.radius * 2 > canvas.height ||
+                    eachProjectile.y + eachProjectile.radius < 0
+                )
+                    this.projectiles.splice(index, 1);
+            }
+            
+            renderExplosion(this.explosionParticlesOnFire);
+            renderExplosion(this.projectileExplosions);
+
+            postExplosion(this.explosionParticlesOnFire);
+            postExplosion(this.projectileExplosions);
+            for (let i = 0; i < this.projectiles.length; i++) {
+                const projectile = this.projectiles[i];
+                for (let index = 0; index < tankArray.length; index++) {
+                    const eachTank = tankArray[index];
+                    if (
+                        eachTank !== this &&
+                        distance(projectile.x, projectile.y, eachTank.x, eachTank.y) <=
+                        50 &&
+                        eachTank.health > 0
+                    ) {
+                        this.score += 1;
+                        eachTank.health -= 1;
+                        this.projectiles.splice(projectile, 1);
+                        defineExplosion(
+                            projectile.x,
+                            projectile.y,
+                            this.projectileExplosions,
+                            "random",
+                            { x: randomFromRange(-5, 5), y: randomFromRange(-5, 5) },
+                            { x: randomFromRange(-0.05, 0.05), y: randomFromRange(-0.05, 0.05) }
+                        );
+                    }
+                }
+            }
+        },
+        shootProjectile: function () {
+            if (state === "play") {
+                const obj = this;
+                const angle = obj.turret.le.rotate.angle;
+                if (obj.canShoot) {
+                    defineExplosion(obj.turret.le.x1, obj.turret.le.y1, obj.explosionParticlesOnFire, obj.rotateAngle);
+                    obj.projectiles.push(
+                        new Circle(
+                            obj.turret.le.x1,
+                            obj.turret.le.y1,
+                            3,
+                            "red",
+                            { x: Math.cos(-angle) * 20, y: Math.sin(-angle) * 20 }
+                        )
+                    );
+    
+                    obj.canShoot = false;
+                    obj.shootInterval = window.setTimeout(
+                        function () {
+                            obj.canShoot = true;
+                        },
+                        500
+                    );
+                    this.projectileCount -= 1;
+                }
+            }
+        },
+        userControl: function () {
+            if (mouse.x !== undefined) this.rotateAngle = -Math.atan2(mouse.y - this.y, mouse.x - this.x);
+            if (keyCode[65]) this.moveLeft();
+            if (keyCode[68]) this.moveRight();
+                if (keyCode[87]) this.moveAhead();
+            if (keyCode[83]) this.moveBackward();
+        },
+        autoControl: function (target) {
+            let canMove = true;
+            const playerAngle = -Math.atan2(
+                target.y - this.y,
+                target.x - this.x
+            );
+            const diffBetweenPlayerAngle = this.rotateAngle - playerAngle;
+            const speeedOfRotation = 0.008;
+
+            this.body.rotate.angle = playerAngle;
+
+            for (let index = 0; index < tankArray.length; index++) {
+                const eachEnemy = tankArray[index];
+                if (
+                    (eachEnemy !== this &&
+                    distance(this.x, this.y, eachEnemy.x, eachEnemy.y) <=
+                    eachEnemy.height * 1.5) ||
+                    distance(target.x, target.y, this.x, this.y) <=
+                    200
+                )
+                    canMove = false;
+            }
+
+            if (canMove) this.moveAhead();
+
+            if (
+                diffBetweenPlayerAngle < 0.02 &&
+                diffBetweenPlayerAngle > -0.02
+            )
+                this.shootProjectile();
+            else if (playerAngle > this.rotateAngle)
+                this.rotateAngle += speeedOfRotation;
+            else this.rotateAngle -= speeedOfRotation;
+        }
+    };
+    const tank = new Tank(
+        canvas.width * 0.5,
+        canvas.height * 0.5,
+        50,
+        100,
+        { turret: "#8B0000", body: "red" },
+        50,
+        50,
+        "player"
+    );
+    const gameUI = {
+        body: new Rect(canvas.width * 0.5, canvas.height * 0.5, canvas.width * 0.25, 400, "#e0c9f7"),
+        btn: new Rect(canvas.width * 0.5, canvas.height * 0.5, 100, 50, "blue"),
+        btnText: "Play",
+        set: function () {
+            const btnColor = c.createRadialGradient(this.btn.x, this.btn.y, 25, this.btn.x, this.btn.y, 100);
+            btnColor.addColorStop(0, "wheat");
+            btnColor.addColorStop(1, "white");
+            this.btn.color = btnColor;
+        },
+        setValues: function () {
+            this.body.x = canvas.width * 0.5;
+            this.body.y = canvas.height * 0.5;
+            this.body.width = canvas.width * 0.25;
+            this.body.height = 400;
+            this.btn.x = this.body.x;
+            this.btn.y = this.body.y;
+        },
+        render: function () {
+            this.body.draw();
+            if (state === "end") {
+                drawText(this.btn.x, this.btn.y - 125, String(tank.score), "black", 50, "Arial", true);
+                drawText(this.btn.x, this.btn.y - 100, "Score", "black", 15, "Arial", true);
+                this.btnText = "Retry";
+            }
+            this.btn.draw();
+            drawText(this.btn.x, this.btn.y, this.btnText, "black", this.btn.height * 0.5, "Arial", true);
+            this.setValues();
+            if (this.btn.collisionToPoint(mouse.x, mouse.y)) {
+                let x = this.btn.x;
+                let y = this.btn.y;
+                if (mouse.x !== undefined) {
+                    x = mouse.x;
+                    y = mouse.y;
+                }
+                const btnColor = c.createRadialGradient(x, y, 25, this.btn.x, this.btn.y, 100);
+                btnColor.addColorStop(0, "wheat");
+                btnColor.addColorStop(1, "white");
+                this.btn.color = btnColor;
+                canvas.style.cursor = "pointer";
+            } else {
+                canvas.style.cursor = "auto";
+            }
+            if (this.btn.collisionToPoint(click.x, click.y)) {
+                state = "play";
+                canvas.style.cursor = "auto";
+                tank.x = canvas.width * 0.5;
+                tank.y = canvas.height * 0.5;
+                tank.health = 50;
+                tank.projectileCount = 50;
+                tank.body.rotate.angle = Math.PI * 0.5;
+                tankArray.length = 0;
+                tankArray[0] = tank;
+                spawnEnemy();
+                click.x = NaN;
+                click.y = NaN;
+            }
+        }
+    };
+    function randomFromRange(min, max) {
+        return Math.random() * (max - min) + min;
+    }
+    function randomIntFromRange(min, max) {
+        return Math.floor(randomFromRange(min, max));
+    }
+    function returnRandomItemsFrom(arrayParameter) {
+        return arrayParameter[randomIntFromRange(0, arrayParameter.length)];
+    }
+    function distance(x1, y1, x2, y2) {
+        return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+    }
+    function drawText(x, y, text, color, size, font, alignToCenter) {
+        if (alignToCenter) {
+            x -= size * text.length * 0.25;
+        }
+        c.fillStyle = color;
+        c.font = size + "px " + font;
+        c.fillText(
+            text,
+            x,
+            y
+        );
+    }
+    function defineExplosion(x, y, array, originRadian, _defineCircularRadii_, _defineRadianVelocity_) {
+        for (let index = 0; index < randomIntFromRange(25, 50); index++) {
+            const circularRadii = _defineCircularRadii_ || {
+                x: randomFromRange(1, 5),
+                y: randomFromRange(1, 5)
+            }
+            const radianVelocity = _defineRadianVelocity_ || {
+                x: randomFromRange(-0.05, 0.05),
+                y: randomFromRange(-0.05, 0.05)
+            }
+            let radian = originRadian;
+            if (originRadian === "random")
+                radian = {
+                    x: randomFromRange(-Math.PI, Math.PI),
+                    y: randomFromRange(-Math.PI, Math.PI)
+                };
+            else if (typeof originRadian === "object")
+                radian = originRadian;
+            else radian = { x: originRadian, y: originRadian };
+            array.push(
+                new Circle(
+                    x, // x
+                    y, // y
+                    Math.random() * 5, // radius
+                    returnRandomItemsFrom(["red", "orange"]), // color
+                    {
+                        angleX: radianVelocity.x,
+                        angleY: radianVelocity.y,
+                        circularRadii: circularRadii
+                    }, // velocity
+                    radian, // angles
+                    { x: Math.random(), y: Math.random() } // circularRadii
+                )
+            );
+        }
+    }
+    function renderExplosion(array) {
+        c.save();
+        c.globalAlpha = 0.5;
+        for (let index = 0; index < array.length; index++) {
+            array[index].makeCircle();
+        }
+        c.restore();
+    }
+    function postExplosion(array) {
+        for (let index = 0; index < array.length; index++) {
+            const eachParticle = array[index];
+            if (eachParticle.frameCount >= randomIntFromRange(14, 28)) {
+                if (eachParticle.radius >= 1) {
+                    eachParticle.radius -= 0.1;
+                } else array.splice(eachParticle, 1);
+            }
+        }
+    }
+    function extimateFloat(n, uptoLength) {
+        let requitedDecimalValue = "";
+        for (let index = 0; index < uptoLength; index++)
+            requitedDecimalValue += String(n).split(".")[1][index];
+        return Number(Math.floor(n) + "." + requitedDecimalValue);
+    }
+    function randomColor() {
+        return "rgb(" + randomIntFromRange(1, 225) + "," +
+        randomIntFromRange(1, 225) + "," +
+        randomIntFromRange(1, 225) + ")";
+    }
+    function pointOnCircle(x, y, radius, angle) {
+        return {
+            x: x + Math.cos(-angle) * radius,
+            y: y + Math.sin(-angle) * radius
+        };
+    }
+    function onResize() {
+        canvas.width = document.documentElement.clientWidth;
+        canvas.height = document.documentElement.clientHeight;
+        try {
+            gameUI.set();
+        } catch (err) { }
+    }
+    function mouseEvent(event) {
+        mouse.x = event.pageX;
+        mouse.y = event.pageY;
+    }
+    function keyEvent(event) {
+        if (event.type === "keydown") {
+            keyCode[event.keyCode] = true;
+            if (keyCode[32]) tank.shootProjectile();
+        }
+        else {
+            keyCode[event.keyCode] = false;
+        }
+    }
+    function spawnEnemy() {
+        if (document.hasFocus() && state === "play") {
+            for (let index = 0; index < randomIntFromRange(1, 2); index++) {
+                const width = 50;
+                const height = 100;
+                const y = randomFromRange(-height, canvas.height - height);
+                if (returnRandomItemsFrom([true, false]))
+                    x = randomFromRange(canvas.width + height, canvas.width + height * 2);
+                else x = randomFromRange(-height * 2, -height);
+                new Tank(
+                    x,
+                    y,
+                    width,
+                    height,
+                    { turret: randomColor(), body: randomColor() },
+                    50,
+                    1,
+                    "enemy"
+                );
+            }
+        }
+    }
+    (function animate() {
+        window.requestAnimationFrame(animate);
+        const healthWidth = (tank.health * 100) / 50;
+        const healthHeight = 25;
+        const healthX = healthWidth * 0.5 + canvas.width - 200;
+        const healthY = 30;
+        const healthColor = c.createLinearGradient(
+            healthX - healthWidth * 0.5,
+            healthY,
+            healthX - healthWidth * 0.5,
+            healthY + healthHeight
+        );
+        const _healthColor = "rgb(" + (255 - (tank.health * 255)/50) + "," + (tank.health * 255)/50 + ",100)";
+        healthColor.addColorStop(0, _healthColor);
+        healthColor.addColorStop(1, "yellow");
+        c.fillStyle = "#e0c9f7";
+        c.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (tank.health === 0) state = "end";
+
+        if (state !== "start") {
+
+            for (let index = 0; index < tankArray.length; index++) {
+                const eachTank = tankArray[index];
+                if (eachTank.health > 0) {
+                    eachTank.render();
+                    if (state === "play") {
+                        if (eachTank.id === "enemy") eachTank.autoControl(tank);
+                        else if (eachTank.id === "player") eachTank.userControl();
+                    }
+                } else if (eachTank !== tank) {
+                    tankArray.splice(index, 1);
+                }
+            }
+
+            if (state === "end") {
+                c.fillStyle = "rgba(25, 25, 25, 0.8)";
+                c.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            drawText(10, 30, "Ammo: " + tank.projectileCount, "black", 30, "Arial");
+            drawText(10, 65, "Score: " + tank.score, "black", 30, "Arial");
+            drawText(10, 95, "Health: " + tank.health, "black", 30, "Arial");
+            drawText(healthX - healthWidth * 0.5 - 100, healthY + healthHeight * 0.5, "Health: ", "black", 30, "Arial");
+            (new Rect(healthX, healthY, healthWidth, healthHeight, healthColor)).draw();
+        }
+
+        if (state === "start" || state == "end") {
+            gameUI.render();
+        }
+    }).call();
+    onResize();
+    window.setInterval(spawnEnemy, 3000);
+    spawnEnemy();
+    window.addEventListener("click", function (event) {
+        tank.shootProjectile();
+        click.x = event.pageX;
+        click.y = event.pageY;
+    }, false);
+    window.addEventListener("resize", onResize, false);
+    window.addEventListener("mousemove", mouseEvent, false);
+    window.addEventListener("keydown", keyEvent, false);
+    window.addEventListener("keyup", keyEvent, false);
+    document.body.innerHTML += "<style>body{margin: 0px;} canvas {position: absolute;}</style>";
+    document.body.appendChild(canvas);
+}).call(window);
+    </script>
+</body>
+</html>
